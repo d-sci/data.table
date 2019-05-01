@@ -20,7 +20,7 @@
     class=getOption("datatable.print.class"),  # default: FALSE
     row.names=getOption("datatable.print.rownames"), # default: TRUE
     col.names=getOption("datatable.print.colnames"), # default: "auto"
-    print.keys=getOption("datatable.print.keys"),    # default: FALSE
+    print.keys=getOption("datatable.print.keys"),    # default: FALSEs
     quote=FALSE, \dots)
     
   format_col(x, \dots)

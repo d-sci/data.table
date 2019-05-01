@@ -6,7 +6,8 @@ print.data.table <- function(x, topn=getOption("datatable.print.topn"),
                row.names=getOption("datatable.print.rownames"),
                col.names=getOption("datatable.print.colnames"),
                print.keys=getOption("datatable.print.keys"),
-               quote=FALSE, ...) {    # topn  - print the top topn and bottom topn rows with '---' inbetween (5)
+               quote=FALSE, ...) {    
+  # topn  - print the top topn and bottom topn rows with '---' inbetween (5)
   # nrows - under this the whole (small) table is printed, unless topn is provided (100)
   # class - should column class be printed underneath column name? (FALSE)
   if (!col.names %chin% c("auto", "top", "none"))
