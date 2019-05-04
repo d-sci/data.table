@@ -148,6 +148,9 @@ format_col.default = function(x, ...) {
 # #2842 -- different columns can have different tzone, so force usage in output
 format_col.POSIXct = function(x, ...) format(x, usetz = TRUE, ...)
 
+# #3011 -- expression columns can wrap to newlines which breaks printing
+format_col.expression = function(x, ...) format(char.trunc(as.character(x)), ...)
+
 format_list_item.default = function(x, ...) {
   if (is.null(x)) return ("") # NULL item in a list column
   if (is.atomic(x) || inherits(x, "formula")) # FR #2591 - format.data.table issue with columns of class "formula"

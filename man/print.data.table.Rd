@@ -26,6 +26,7 @@
   format_col(x, \dots)
   \method{format_col}{default}(x, \dots)
   \method{format_col}{POSIXct}(x, \dots)
+  \method{format_col}{expression}{x, \dots)
   
   format_list_item(x, \dots)
   \method{format_list_item}{default}(x, \dots)
