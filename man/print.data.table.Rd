@@ -3,6 +3,7 @@
 \alias{format_col}
 \alias{format_col.default}
 \alias{format_col.POSIXct}
+\alias{format_col.expression}
 \alias{format_list_item}
 \alias{format_list_item.default}
 \title{ data.table Printing Options }
