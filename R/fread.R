@@ -1,4 +1,3 @@
-
 fread <- function(
 input="", file=NULL, text=NULL, cmd=NULL, sep="auto", sep2="auto", dec=".", quote="\"", nrows=Inf, header="auto",
 na.strings=getOption("datatable.na.strings","NA"), stringsAsFactors=FALSE, verbose=getOption("datatable.verbose",FALSE),
@@ -6,7 +5,7 @@ skip="__auto__", select=NULL, drop=NULL, colClasses=NULL, integer64=getOption("d
 col.names, check.names=FALSE, encoding="unknown", strip.white=TRUE, fill=FALSE, blank.lines.skip=FALSE, key=NULL, index=NULL,
 showProgress=getOption("datatable.showProgress",interactive()), data.table=getOption("datatable.fread.datatable",TRUE),
 nThread=getDTthreads(verbose), logical01=getOption("datatable.logical01",FALSE), keepLeadingZeros=getOption("datatable.keepLeadingZeros",FALSE),
-autostart=NA)
+yaml=FALSE, autostart=NA)
 {
   if (missing(input)+is.null(file)+is.null(text)+is.null(cmd) < 3L) stop("Used more than one of the arguments input=, file=, text= and cmd=.")
   input_has_vars = length(all.vars(substitute(input)))>0L  # see news for v1.11.6
@@ -23,7 +22,8 @@ autostart=NA)
     stop("Argument 'encoding' must be 'unknown', 'UTF-8' or 'Latin-1'.")
   }
   stopifnot( isTRUEorFALSE(strip.white), isTRUEorFALSE(blank.lines.skip), isTRUEorFALSE(fill), isTRUEorFALSE(showProgress),
-             isTRUEorFALSE(stringsAsFactors), isTRUEorFALSE(verbose), isTRUEorFALSE(check.names), isTRUEorFALSE(logical01), isTRUEorFALSE(keepLeadingZeros) )
+             isTRUEorFALSE(verbose), isTRUEorFALSE(check.names), isTRUEorFALSE(logical01), isTRUEorFALSE(keepLeadingZeros), isTRUEorFALSE(yaml) )
+  stopifnot( isTRUEorFALSE(stringsAsFactors) || (is.double(stringsAsFactors) && length(stringsAsFactors)==1L && 0.0<=stringsAsFactors && stringsAsFactors<=1.0))
   stopifnot( is.numeric(nrows), length(nrows)==1L )
   if (is.na(nrows) || nrows<0) nrows=Inf   # accept -1 to mean Inf, as read.table does
   if (identical(header,"auto")) header=NA
@@ -123,14 +123,19 @@ autostart=NA)
   }
   if (!is.null(colClasses) && is.atomic(colClasses)) {
     if (!is.character(colClasses)) stop("colClasses is not type list or character vector")
-    if (!length(colClasses)) stop("colClasses is character vector ok but has 0 length")
-    if (!is.null(names(colClasses))) {   # names are column names; convert to list approach
+    if (!length(colClasses)) {
+      colClasses=NULL;
+    } else if (identical(colClasses, "NULL")) {
+      colClasses = NULL
+      warning('colClasses="NULL" (quoted) is interpreted as colClasses=NULL (the default) as opposed to dropping every column.')
+    } else if (!is.null(names(colClasses))) {   # names are column names; convert to list approach
       colClasses = tapply(names(colClasses), colClasses, c, simplify=FALSE)
     }
   }
   stopifnot(length(skip)==1L, !is.na(skip), is.character(skip) || is.numeric(skip))
-  if (skip=="__auto__") skip=-1L   # skip="string" so long as "string" is not "__auto__". Best conveys to user something is automatic there (than -1 or NA).
-  if (is.double(skip)) skip = as.integer(skip)
+  if (identical(skip,"__auto__")) skip = ifelse(yaml,0L,-1L)
+  else if (is.double(skip)) skip = as.integer(skip)
+  # else skip="string" so long as "string" is not "__auto__" (best conveys to user skip is automatic rather than user needing to know -1 or NA means auto)
   stopifnot(is.null(na.strings) || is.character(na.strings))
   tt = grep("^\\s+$", na.strings)
   if (length(tt)) {
@@ -146,6 +151,120 @@ autostart=NA)
       stop(msg, 'But strip.white=FALSE. Use strip.white=TRUE (default) together with na.strings="" to turn any number of spaces in string columns into <NA>')
     }
     # whitespace at the beginning or end of na.strings is checked at C level and is an error there; test 1804
+  }
+  if (yaml) {
+    # for tracking which YAML elements may be overridden by being declared explicitly
+    call_args = names(match.call())
+    if (!requireNamespace('yaml', quietly = TRUE))
+      stop("'data.table' relies on the package 'yaml' to parse the file header; please add this to your library with install.packages('yaml') and try again.") # nocov
+    if (is.character(skip))
+      warning("Combining a search string as 'skip' and reading a YAML header may not work as expected -- currently, ",
+              "reading will proceed to search for 'skip' from the beginning of the file, NOT from the end of ",
+              "the metadata; please file an issue on GitHub if you'd like to see more intuitive behavior supported.")
+    # create connection to stream header lines from file:
+    #   https://stackoverflow.com/questions/9871307
+    f = base::file(input, 'r')
+    first_line = readLines(f, n=1L)
+    n_read = 1L
+    yaml_border_re = '^#?---'
+    if (!grepl(yaml_border_re, first_line)) {
+      close(f)
+      stop('Encountered <', substring(first_line, 1L, 50L), if (nchar(first_line) > 50L) '...', '> at the first ',
+           'unskipped line (', 1L+skip, '), which does not constitute the start to a valid YAML header ',
+           '(expecting something matching regex "', yaml_border_re, '"); please check your input and try again.')
+    }
+
+    yaml_comment_re = '^#'
+    yaml_string = character(0L)
+    while (TRUE) {
+      this_line = readLines(f, n=1L)
+      n_read = n_read + 1L
+      if (!length(this_line)){
+        close(f)
+        stop('Reached the end of the file before finding a completion to the YAML header. A valid YAML header is bookended by lines matching ',
+             'the regex "', yaml_border_re, '". Please double check the input file is a valid csvy.')
+      }
+      if (grepl(yaml_border_re, this_line)) break
+      if (grepl(yaml_comment_re, this_line))
+        this_line = sub(yaml_comment_re, '', this_line)
+      yaml_string = paste(yaml_string, this_line, sep='\n')
+    }
+    close(f) # when #561 is implemented, no need to close f.
+
+    yaml_header = yaml::yaml.load(yaml_string)
+    yaml_names = names(yaml_header)
+    if (verbose) cat('Processed', n_read, 'lines of YAML metadata with the following top-level fields:', brackify(yaml_names), '\n')
+    # process header first since it impacts how to handle colClasses
+    if ('header' %chin% yaml_names) {
+      if ('header' %chin% call_args) message("User-supplied 'header' will override that found in metadata.")
+      else header = as.logical(yaml_header$header)
+    }
+    if ('schema' %chin% yaml_names) {
+      new_types = sapply(yaml_header$schema$fields, `[[`, 'type')
+      if (any(null_idx <- sapply(new_types, is.null)))
+        new_types = do.call(c, new_types)
+      synonms = rbindlist(list(
+        character = list(syn = c('character', 'string')),
+        integer = list(syn = c('integer', 'int')),
+        numeric = list(syn = c('numeric', 'number', 'double')),
+        factor = list(syn = c('factor', 'categorical')),
+        integer64 = list(syn = c('integer64', 'int64'))
+      ), idcol = 'r_type')
+      setkeyv(synonms, 'syn')
+      new_types = synonms[list(new_types)]$r_type
+      new_names = sapply(yaml_header$schema$fields[!null_idx], `[[`, 'name')
+
+      if ('col.names' %chin% call_args) message("User-supplied column names in 'col.names' will override those found in YAML metadata.")
+      # resolve any conflicts with colClasses, if supplied;
+      #   colClasses (if present) is already in list form by now
+      if ('colClasses' %chin% call_args) {
+        if (any(idx_name <- new_names %chin% unlist(colClasses))) {
+          matched_name_idx = which(idx_name)
+          if (!all(idx_type <- sapply(matched_name_idx, function(ii) {
+            new_names[ii] %chin% colClasses[[ new_types[ii] ]]
+          }))) {
+            plural = sum(idx_type) > 1L
+            message('colClasses dictated by user input and those read from YAML header are in conflict (specifically, for column', if (plural) 's',
+                    ' [', paste(new_names[matched_name_idx[!idx_type]], collapse = ','), ']); the proceeding assumes the user input was ',
+                    'an intentional override and will ignore the types implied by the YAML header; please exclude ',
+                    if (plural) 'these columns' else 'this column from colClasses if this was unintentional.')
+          }
+        }
+        # only add unmentioned columns
+        for (ii in which(!idx_name)) {
+          colClasses[[ new_types[ii] ]] = c(colClasses[[ new_types[ii] ]], new_names[ii])
+        }
+      } else {
+        # there are no names to be matched in the data, which fread expects
+        #   at the C level; instead, apply these in post through col.names
+        #   and send the auto-generated V1:Vn as dummies
+        if (identical(header, FALSE)) {
+          if (!'col.names' %chin% call_args) col.names = new_names
+          new_names = paste0('V', seq_along(new_names))
+        }
+        colClasses = tapply(new_names, new_types, c, simplify=FALSE)
+      }
+    }
+    sep_syn = c('sep', 'delimiter')
+    if (any(sep_idx <- sep_syn %chin% yaml_names)) {
+      if ('sep' %chin% call_args) message("User-supplied 'sep' will override that found in metadata.")
+      else sep = yaml_header[[ sep_syn[sep_idx][1L] ]]
+    }
+    quote_syn = c('quote', 'quoteChar', 'quote_char')
+    if (any(quote_idx <- quote_syn %chin% yaml_names)) {
+      if ('quote' %chin% call_args) message("User-supplied 'quote' will override that found in metadata.")
+      else quote = yaml_header[[ quote_syn[quote_idx][1L] ]]
+    }
+    dec_syn = c('dec', 'decimal')
+    if (any(dec_idx <- dec_syn %chin% yaml_names)) {
+      if ('dec' %chin% call_args) message("User-supplied 'dec' will override that found in metadata.")
+      else dec = yaml_header[[ dec_syn[dec_idx][1L] ]]
+    }
+    if ('na.strings' %chin% yaml_names) {
+      if ('na.strings' %chin% call_args) message("User-supplied 'na.strings' will override that found in metadata.")
+      else na.strings = yaml_header$na.strings
+    }
+    if (is.integer(skip)) skip = skip + n_read
   }
   warnings2errors = getOption("warn") >= 2
   ans = .Call(CfreadR,input,sep,dec,quote,header,nrows,skip,na.strings,strip.white,blank.lines.skip,
@@ -164,29 +283,58 @@ autostart=NA)
   if (check.names) {
     setattr(ans, 'names', make.names(names(ans), unique=TRUE))
   }
-  cols = NULL
-  if (stringsAsFactors)
-    cols = which(vapply(ans, is.character, TRUE))
-  else if (length(colClasses)) {
-    if (is.list(colClasses) && "factor" %chin% names(colClasses))
-      cols = colClasses[["factor"]]
-    else if (is.character(colClasses) && "factor" %chin% colClasses)
-      cols = which(colClasses=="factor")
+
+  colClassesAs = attr(ans, "colClassesAs")   # should only be present if one or more are != ""
+  for (j in which(colClassesAs!="")) {       # # 1634
+    v <- .subset2(ans, j)
+    new_class = colClassesAs[j]
+    new_v <- tryCatch({    # different to read.csv; i.e. won't error if a column won't coerce (fallback with warning instead)
+      switch(new_class,
+             "factor" = as_factor(v),
+             "complex" = as.complex(v),
+             "raw" = as_raw(v),  # Internal implementation
+             "Date" = as.Date(v),
+             "POSIXct" = as.POSIXct(v),
+             # finally:
+             methods::as(v, new_class))
+      },
+      warning = fun <- function(e) {
+        warning("Column '", names(ans)[j], "' was set by colClasses to be '", new_class, "' but fread encountered the following ",
+                if (inherits(e, "error")) "error" else "warning", ":\n\t", e$message, "\nso the column has been left as type '", typeof(v), "'", call.=FALSE)
+        return(v)
+      },
+      error = fun)
+    set(ans, j = j, value = new_v)  # aside: new_v == v if the coercion was aborted
   }
-  setfactor(ans, cols, verbose)
-  # 2007: is.missing is not correct since default value of select is NULL
-  if (!is.null(select)) {
-    # fix for #1445
-    if (is.numeric(select)) {
-      reorder = frank(select)
+  setattr(ans, "colClassesAs", NULL)
+
+  if (stringsAsFactors) {
+    if (is.double(stringsAsFactors)) { #2025
+      should_be_factor <- function(v) is.character(v) && uniqueN(v) < nr * stringsAsFactors
+      cols_to_factor <- which(vapply(ans, should_be_factor, logical(1L)))
     } else {
-      reorder = select[select %chin% names(ans)]
-      # any missing columns are warning about in fread.c and skipped
+      cols_to_factor <- which(vapply(ans, is.character, logical(1L)))
     }
-    setcolorder(ans, reorder)
+    if (verbose) cat("stringsAsFactors=", stringsAsFactors, " converted ", length(cols_to_factor), " column(s): ", brackify(names(ans)[cols_to_factor]), "\n", sep="")
+    for (j in cols_to_factor) set(ans, j=j, value=as_factor(.subset2(ans, j)))
   }
-  # FR #768
-  if (!missing(col.names))
+
+  if (!is.null(select)) {
+    if (is.numeric(select)) {
+      if (length(o <- forderv(select))) {
+        rank = integer(length(o))
+        rank[o] = 1:length(o)
+        setcolorder(ans, rank)
+      }
+    } else {
+      if (!identical(names(ans), select)) {
+        reorder = select[select %chin% names(ans)] # any missing columns are warned about in freadR.c and skipped
+        setcolorder(ans, reorder)
+      }
+    }
+  }
+
+  if (!missing(col.names))   # FR #768
     setnames(ans, col.names) # setnames checks and errors automatically
   if (!is.null(key) && data.table) {
     if (!is.character(key))
@@ -196,6 +344,7 @@ autostart=NA)
     }
     setkeyv(ans, key)
   }
+  if (yaml) setattr(ans, 'yaml_metadata', yaml_header)
   if (!is.null(index) && data.table) {
     if (!all(sapply(index, is.character)))
       stop("index argument of data.table() must be a character vector naming columns (NB: col.names are applied before this)")
@@ -214,20 +363,17 @@ autostart=NA)
   ans
 }
 
-# for internal use only. Used in `fread` and `data.table` for 'stringsAsFactors' argument
-setfactor <- function(x, cols, verbose) {
-  # simplified but faster version of `factor()` for internal use.
-  as_factor <- function(x) {
-    lev = forderv(x, retGrp = TRUE, na.last = NA)
-    # get levels, also take care of all sorted condition
-    lev = if (length(lev)) x[lev[attributes(lev)$starts]] else x[attributes(lev)$starts]
-    ans = chmatch(x, lev)
-    setattr(ans, 'levels', lev)
-    setattr(ans, 'class', 'factor')
-  }
-  if (length(cols)) {
-    if (verbose) cat("Converting column(s) ", brackify(names(x)[cols]), " from 'char' to 'factor'\n", sep = "")
-    for (j in cols) set(x, j = j, value = as_factor(.subset2(x, j)))
-  }
-  invisible(x)
+# simplified but faster version of `factor()` for internal use.
+as_factor <- function(x) {
+  lev = forderv(x, retGrp = TRUE, na.last = NA)
+  # get levels, also take care of all sorted condition
+  lev = if (length(lev)) x[lev[attributes(lev)$starts]] else x[attributes(lev)$starts]
+  ans = chmatch(x, lev)
+  setattr(ans, 'levels', lev)
+  setattr(ans, 'class', 'factor')
 }
+
+as_raw <- function(x) {
+  scan(text=x, what=raw(), quiet=TRUE)  # as in read.csv, which ultimately uses src/main/scan.c and strtoraw
+}
+
